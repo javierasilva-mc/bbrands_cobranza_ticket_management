@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_cobranza_historial,cobranza.historial,model_cobranza_historial,base.group_user,1,1,1,1
+access_cobranza_config,cobranza.config,model_cobranza_config,base.group_user,1,1,1,1
+access_cobranza_config_tarea,cobranza.config.tarea,model_cobranza_config_tarea,base.group_user,1,1,1,1
+access_cobranza_config_regla,cobranza.config.regla,model_cobranza_config_regla,base.group_user,1,1,1,1
+access_cobranza_config_regla_tarea,cobranza.config.regla.tarea,model_cobranza_config_regla_tarea,base.group_user,1,1,1,1

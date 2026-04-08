@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_helpdesk_ticket_cobranza_form" model="ir.ui.view">
+        <field name="name">helpdesk.ticket.cobranza.form.inherit</field>
+        <field name="model">helpdesk.ticket</field>
+        <field name="inherit_id" ref="helpdesk.helpdesk_ticket_view_form"/>
+        <field name="arch" type="xml">
+
+            <!-- Nueva pestaña "Boletas vencidas" insertada después de Descripción -->
+            <xpath expr="//page[@name='description']" position="after">
+                <page string="Boletas vencidas" name="boletas_vencidas">
+
+                    <!-- Resumen numérico -->
+                    <group string="Resumen">
+                        <group>
+                            <field name="cobranza_cantidad_boletas"
+                                   string="Cantidad de boletas"/>
+                            <field name="cobranza_total_adeudado"
+                                   string="Total adeudado"
+                                   widget="monetary"
+                                   options="{'currency_field': 'cobranza_currency_id'}"/>
+                            <field name="cobranza_currency_id" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <!-- Tabla de facturas/boletas con hipervínculo implícito por fila -->
+                    <field name="invoice_cobranza_ids"
+                           widget="many2many"
+                           nolabel="1"
+                           readonly="1">
+                        <list string="Boletas vencidas"
+                              create="false"
+                              delete="false"
+                              open_form_view="true">
+                            <!--
+                                open_form_view="true" habilita el ícono de flecha
+                                en cada fila para abrir la factura completa.
+                            -->
+                            <field name="name"
+                                   string="Número"
+                                   readonly="1"/>
+                            <field name="invoice_date"
+                                   string="Fecha de Emisión"
+                                   readonly="1"/>
+                            <field name="amount_total"
+                                   string="Total"
+                                   readonly="1"
+                                   widget="monetary"
+                                   options="{'currency_field': 'currency_id'}"/>
+                            <field name="payment_state"
+                                   string="Estado"
+                                   readonly="1"
+                                   widget="badge"
+                                   decoration-danger="payment_state in ['not_paid', 'partial']"
+                                   decoration-success="payment_state == 'paid'"
+                                   decoration-warning="payment_state == 'in_payment'"/>
+                            <field name="currency_id" column_invisible="1"/>
+                        </list>
+                    </field>
+
+                    <!-- Botón para abrir todas en Contabilidad -->
+                    <div class="mt-2">
+                        <button name="action_ver_boletas_vencidas"
+                                type="object"
+                                string="Ver en Contabilidad"
+                                class="btn btn-secondary"
+                                invisible="not invoice_cobranza_ids"/>
+                    </div>
+
+                </page>
+
+                <page string="Historial" name="historial_cobranza">
+                    <field name="cobranza_historial_ids"
+                           nolabel="1"
+                           readonly="1">
+                        <list create="false" delete="false">
+                            <field name="fecha_evento" string="Fecha"/>
+                            <field name="tipo_evento" string="Evento" widget="badge"
+                                   decoration-info="tipo_evento == 'ticket_creado'"
+                                   decoration-success="tipo_evento == 'pago'"
+                                   decoration-warning="tipo_evento in ['acuerdo', 'seguimiento']"
+                                   decoration-primary="tipo_evento == 'boleta_agregada'"
+                                   decoration-danger="tipo_evento == 'reapertura'"/>
+                            <field name="move_id" string="Boleta / Factura"/>
+                            <field name="estado_anterior" string="Estado anterior"/>
+                            <field name="estado_nuevo" string="Estado nuevo"/>
+                            <field name="monto_original" string="Monto original" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                            <field name="monto_recuperado" string="Monto recuperado" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                            <field name="ejecutivo_ids" string="Ejecutivos" widget="many2many_tags"/>
+                            <field name="currency_id" column_invisible="1"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+
+        </field>
+    </record>
+
+    <record id="view_task_cobranza_form_inherit" model="ir.ui.view">
+        <field name="name">project.task.cobranza.form.inherit</field>
+        <field name="model">project.task</field>
+        <field name="inherit_id" ref="industry_fsm.view_task_form2_inherit"/>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='tag_ids']" position="after">
+                <field name="cobranza_fecha_acuerdo"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

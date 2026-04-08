@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="ir_cron_cobranza_tickets" model="ir.cron">
+        <field name="name">BBrands: Crear tickets de cobranza por facturas vencidas</field>
+        <field name="model_id" search="[('model', '=', 'helpdesk.ticket')]"/>
+        <field name="state">code</field>
+        <field name="code">model.cron_crear_tickets_cobranza()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active">True</field>
+        <field name="priority">5</field>
+    </record>
+</odoo>
