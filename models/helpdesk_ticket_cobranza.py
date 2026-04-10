@@ -61,6 +61,12 @@ class HelpdeskTicketCobranza(models.Model):
         default=False,
         copy=False,
     )
+    
+    cobranza_config_id = fields.Many2one(
+        'cobranza.config',
+        string='Configuración de cobranza',
+        ondelete='set null',
+    )
 
     @api.depends('invoice_cobranza_ids', 'invoice_cobranza_ids.amount_residual', 'invoice_cobranza_ids.payment_state')
     def _compute_cobranza_total(self):
@@ -97,71 +103,97 @@ class HelpdeskTicketCobranza(models.Model):
     # -------------------------------------------------------------------------
     @api.model
     def cron_crear_tickets_cobranza(self):
-        cfg = self._get_cobranza_config()
-        hoy = datetime.date.today()
-        fecha_limite = hoy - datetime.timedelta(days=cfg.dias_vencimiento)
+        cfg_model = self.env['cobranza.config']
+        todas_configs = cfg_model.search([], order='secuencia')
+        if not todas_configs:
+            todas_configs = [cfg_model._crear_config_default()]
 
-        # Paso 1 - tickets abiertos
+        hoy = datetime.date.today()
+
+        # Paso 1: actualizar tickets abiertos existentes
         tickets_abiertos = self.env['helpdesk.ticket'].search([
             ('es_ticket_cobranza', '=', True),
-            ('state_id', '!=', cfg.stage_cerrado_id.id),
+            ('state_id', 'not in', [c.stage_cerrado_id.id for c in todas_configs if c.stage_cerrado_id]),
         ])
-
-        partners_con_ticket = set()
+        partners_con_ticket_abierto = set()
         for ticket in tickets_abiertos:
-            partners_con_ticket.add(ticket.partner_id.id)
-            self._actualizar_ticket_existente(ticket)
+            partners_con_ticket_abierto.add(ticket.partner_id.id)
+            cfg = cfg_model.get_config(partner=ticket.partner_id)
+            self._actualizar_ticket_existente(ticket, cfg)
 
-        # tickets cerrados
+        # Paso 2: recopilar partners con ticket cerrado que aún tienen pendientes
         tickets_cerrados = self.env['helpdesk.ticket'].search([
             ('es_ticket_cobranza', '=', True),
-            ('state_id', '=', cfg.stage_cerrado_id.id),
+            ('state_id', 'in', [c.stage_cerrado_id.id for c in todas_configs if c.stage_cerrado_id]),
         ])
         partners_con_ticket_cerrado = set()
         for ticket in tickets_cerrados:
+            cfg = cfg_model.get_config(partner=ticket.partner_id)
             tiene_pendientes = ticket.invoice_cobranza_ids.filtered(
                 lambda m: m.payment_state in self._get_estados_pendientes(cfg)
             )
             if tiene_pendientes:
-                # Tiene boletas pendientes en el ticket cerrado → ya lo reabría _compute_payment_state
-                # pero por si acaso lo excluimos de crear uno nuevo
                 partners_con_ticket_cerrado.add(ticket.partner_id.id)
-        todos_los_partners = partners_con_ticket | partners_con_ticket_cerrado
 
-        # Paso 2: crear tickets solo para clientes sin ningún ticket (abierto ni cerrado)
+        todos_los_partners = partners_con_ticket_abierto | partners_con_ticket_cerrado
+
+        # Paso 3: buscar boletas nuevas y agrupar por (partner, config)
         boletas_nuevas = self.env['account.move'].search([
+            ('move_type', 'in', ['out_invoice', 'out_receipt']),
+            ('state', '=', 'posted'),
+            ('invoice_date', '<=', str(hoy - datetime.timedelta(days=1))),
+            ('partner_id', 'not in', list(todos_los_partners)),
+            ('partner_id', '!=', False),
+        ])
+
+        # Agrupar por (partner_id, config_id)
+        grupos = {}
+        for move in boletas_nuevas:
+            cfg = cfg_model.get_config(
+                partner=move.partner_id,
+                move=move,
+            )
+            estados = self._get_estados_pendientes(cfg)
+            if move.payment_state not in estados:
+                continue
+            if move.invoice_date > hoy - datetime.timedelta(days=cfg.dias_vencimiento):
+                continue
+            key = (move.partner_id.id, cfg.id)
+            if key not in grupos:
+                grupos[key] = {
+                    'partner': move.partner_id,
+                    'cfg': cfg,
+                    'moves': [],
+                }
+            grupos[key]['moves'].append(move)
+
+        _logger.info("COBRANZA CRON - Grupos a procesar: %s",
+            [(g['partner'].name, g['cfg'].name) for g in grupos.values()])
+
+        for key, data in grupos.items():
+            self._crear_ticket_cobranza(data['partner'], data['moves'], data['cfg'])
+
+        # Paso 4: tareas de seguimiento
+        for cfg in todas_configs:
+            self._cron_crear_tareas_seguimiento(cfg)
+
+    def _actualizar_ticket_existente(self, ticket, cfg=None):
+        """Agrega facturas pendientes nuevas al ticket y loguea en chatter."""
+        if cfg is None:
+            cfg = self.env['cobranza.config'].get_config(partner=ticket.partner_id)
+
+        dominio = [
             ('move_type', 'in', ['out_invoice', 'out_receipt']),
             ('payment_state', 'in', self._get_estados_pendientes(cfg)),
             ('state', '=', 'posted'),
-            ('invoice_date', '<=', str(fecha_limite)),
-            ('partner_id', 'not in', list(todos_los_partners)),
-        ])
-
-        if boletas_nuevas:
-            clientes = {}
-            for move in boletas_nuevas:
-                pid = move.partner_id.id
-                if not pid:
-                    continue
-                clientes.setdefault(pid, {'partner': move.partner_id, 'moves': []})
-                clientes[pid]['moves'].append(move)
-
-            _logger.info("COBRANZA CRON - Clientes a procesar: %s",
-                [(pid, data['partner'].name) for pid, data in clientes.items()])
-
-            for partner_id, data in clientes.items():
-                self._crear_ticket_cobranza(data['partner'], data['moves'], cfg)
-
-        self._cron_crear_tareas_seguimiento(cfg)
-
-    def _actualizar_ticket_existente(self, ticket):
-        """Agrega facturas pendientes nuevas al ticket y loguea en chatter."""
-        todas = self.env['account.move'].search([
-            ('move_type', 'in', ['out_invoice', 'out_receipt']),
-            ('payment_state', 'in', self._get_estados_pendientes()),
-            ('state', '=', 'posted'),
             ('partner_id', '=', ticket.partner_id.id),
-        ])
+        ]
+        if cfg.document_type_ids:
+            dominio.append(
+                ('l10n_latam_document_type_id', 'in', cfg.document_type_ids.ids)
+            )
+            
+        todas = self.env['account.move'].search(dominio)
 
         ids_existentes = set(ticket.invoice_cobranza_ids.ids)
         nuevas = todas.filtered(lambda m: m.id not in ids_existentes)
@@ -216,15 +248,22 @@ class HelpdeskTicketCobranza(models.Model):
 
     def _crear_ticket_cobranza(self, partner, moves, cfg=None):
         if cfg is None:
-            cfg = self._get_cobranza_config()
+            cfg = self.env['cobranza.config'].get_config(partner=partner)
 
-        todas_pendientes = self.env['account.move'].search([
+        # Buscar todas las boletas pendientes del cliente que correspondan a esta config
+        dominio = [
             ('move_type', 'in', ['out_invoice', 'out_receipt']),
             ('payment_state', 'in', self._get_estados_pendientes(cfg)),
             ('state', '=', 'posted'),
             ('partner_id', '=', partner.id),
             ('partner_id', '!=', False),
-        ])
+        ]
+        if cfg.document_type_ids:
+            dominio.append(
+                ('l10n_latam_document_type_id', 'in', cfg.document_type_ids.ids)
+            )
+
+        todas_pendientes = self.env['account.move'].search(dominio)
         move_ids = todas_pendientes.ids
         detalle = '\n'.join([
             f'- {m.name} | {m.amount_residual:,.0f} {m.currency_id.name} '
@@ -234,12 +273,13 @@ class HelpdeskTicketCobranza(models.Model):
         total = sum(m.amount_residual for m in todas_pendientes)
         currency = todas_pendientes[0].currency_id.name if todas_pendientes else 'CLP'
 
-        _logger.info("COBRANZA - Creando ticket para partner: %s (id: %s), boletas: %s",
-            partner.name, partner.id, [m.name for m in todas_pendientes])
+        _logger.info("COBRANZA - Creando ticket para partner: %s (id: %s), config: %s, boletas: %s",
+            partner.name, partner.id, cfg.name, [m.name for m in todas_pendientes])
 
         ticket = self.env['helpdesk.ticket'].create({
             'name': f'Cobranza vencida: {partner.name}',
             'es_ticket_cobranza': True,
+            'cobranza_config_id': cfg.id,
             'partner_id': partner.id,
             'ticket_type_id': cfg.ticket_type_id.id if cfg.ticket_type_id else False,
             'category_id': cfg.category_id.id if cfg.category_id else False,
@@ -253,10 +293,10 @@ class HelpdeskTicketCobranza(models.Model):
                 f'Boletas:\n{detalle}'
             ),
         })
-        
-        _logger.info("COBRANZA - Ticket creado: id=%s, partner_id=%s, es_ticket_cobranza=%s",
-            ticket.id, ticket.partner_id.id, ticket.es_ticket_cobranza)
-        
+
+        _logger.info("COBRANZA - Ticket creado: id=%s, partner_id=%s",
+            ticket.id, ticket.partner_id.id)
+
         self._crear_tareas_iniciales_cobranza(ticket, cfg)
 
         self.env['cobranza.historial'].create({
@@ -291,6 +331,7 @@ class HelpdeskTicketCobranza(models.Model):
 
         tickets_abiertos = self.env['helpdesk.ticket'].search([
             ('es_ticket_cobranza', '=', True),
+            ('cobranza_config_id', '=', cfg.id),
             ('state_id', '!=', cfg.stage_cerrado_id.id),
         ])
 
