@@ -41,6 +41,26 @@ class CobranzaConfig(models.Model):
         string='Tipos de documento',
         required=True,
     )
+    
+    payment_term_ids = fields.Many2many(
+        'account.payment.term',
+        'cobranza_config_payment_term_rel',
+        'config_id',
+        'payment_term_id',
+        string='Plazos de pago',
+        help='Si se configura, aplica solo a clientes que tengan algún contrato con este plazo. '
+            'Vacío aplica a cualquier plazo.',
+    )
+    min_documentos = fields.Integer(
+        string='Mínimo de documentos',
+        default=0,
+        help='Cantidad mínima de boletas/facturas pendientes. 0 indica sin límite inferior.',
+    )
+    max_documentos = fields.Integer(
+        string='Máximo de documentos',
+        default=0,
+        help='Cantidad máxima de boletas/facturas pendientes. 0 indica sin límite superior.',
+    )
 
     # Configuración general
     dias_vencimiento = fields.Integer(
@@ -74,6 +94,30 @@ class CobranzaConfig(models.Model):
         'config_id',
         string='Reglas de seguimiento',
     )
+    
+    esta_activo = fields.Boolean(
+        string='Activo',
+        default=True,
+    )
+    
+    def write(self, vals):
+        # Verificar si la config tiene tickets creados
+        for rec in self:
+            tiene_tickets = self.env['helpdesk.ticket'].search_count([
+                ('cobranza_config_id', '=', rec.id),
+                ('es_ticket_cobranza', '=', True),
+            ])
+            if tiene_tickets:
+                campos_permitidos = {'name', 'esta_activo'}
+                campos_modificados = set(vals.keys())
+                campos_no_permitidos = campos_modificados - campos_permitidos
+                if campos_no_permitidos:
+                    raise UserError(
+                        f'La configuración "{rec.name}" ya tiene tickets creados '
+                        f'y no puede ser modificada. Si necesitas cambiar la '
+                        f'configuración, crea una nueva y desactiva esta.'
+                    )
+        return super().write(vals)
 
     @api.constrains('es_default')
     def _check_unico_default(self):
@@ -89,40 +133,75 @@ class CobranzaConfig(models.Model):
                     )
 
     @api.model
-    def get_config(self, partner=None, move=None):
-        """
-        Retorna la configuración más específica que coincida con el partner y/o move.
-        Si no hay coincidencia, retorna la configuración por defecto.
-        Si no existe ninguna configuración, crea la por defecto.
-        """
-        todas = self.search([], order='secuencia')
+    def get_config(self, partner=None, move=None, num_documentos=0):
+        todas = self.search([
+            ('es_default', '=', False),
+            ('esta_activo', '=', True),
+        ], order='secuencia')
 
-        if not todas:
+        if not todas and not self.search([('es_default', '=', True)]):
             return self._crear_config_default()
 
         if partner or move:
-            business_unit_id = partner.business_unit_id.id if partner and partner.business_unit_id else False
-            document_type_id = move.l10n_latam_document_type_id.id if move and move.l10n_latam_document_type_id else False
+            business_unit_id = (
+                partner.business_unit_id.id
+                if partner and partner.business_unit_id else False
+            )
+            document_type_id = (
+                move.l10n_latam_document_type_id.id
+                if move and move.l10n_latam_document_type_id else False
+            )
 
-            for cfg in todas:
-                if cfg.es_default:
-                    continue
-                bu_match = not cfg.business_unit_ids or (
-                    business_unit_id and business_unit_id in cfg.business_unit_ids.ids
-                )
-                dt_match = not cfg.document_type_ids or (
-                    document_type_id and document_type_id in cfg.document_type_ids.ids
-                )
-                if bu_match and dt_match:
-                    return cfg
+            payment_term_ids = []
+            if partner:
+                contratos = self.env['contract.contract'].search([
+                    ('client_name', '=', partner.id)
+                ])
+                payment_term_ids = contratos.mapped('payment_term').ids
+
+            # Separar configs en grupos por especificidad
+            configs_con_plazo_y_rango = todas.filtered(
+                lambda c: c.payment_term_ids and (c.min_documentos > 0 or c.max_documentos > 0)
+            )
+            configs_con_plazo = todas.filtered(
+                lambda c: c.payment_term_ids and not (c.min_documentos > 0 or c.max_documentos > 0)
+            )
+            configs_con_rango = todas.filtered(
+                lambda c: not c.payment_term_ids and (c.min_documentos > 0 or c.max_documentos > 0)
+            )
+            configs_generales = todas.filtered(
+                lambda c: not c.payment_term_ids and not (c.min_documentos > 0 or c.max_documentos > 0)
+            )
+
+            for grupo in [configs_con_plazo_y_rango, configs_con_plazo, configs_con_rango, configs_generales]:
+                for cfg in grupo:
+                    bu_match = business_unit_id and business_unit_id in cfg.business_unit_ids.ids
+                    dt_match = document_type_id and document_type_id in cfg.document_type_ids.ids
+
+                    if not cfg.payment_term_ids:
+                        pt_match = True
+                    else:
+                        pt_match = bool(set(payment_term_ids) & set(cfg.payment_term_ids.ids))
+
+                    if num_documentos > 0:
+                        min_ok = (cfg.min_documentos == 0 or num_documentos >= cfg.min_documentos)
+                        max_ok = (cfg.max_documentos == 0 or num_documentos <= cfg.max_documentos)
+                        rango_match = min_ok and max_ok
+                    else:
+                        rango_match = True
+
+                    if bu_match and dt_match and pt_match and rango_match:
+                        return cfg
 
         # Fallback a la configuración por defecto
-        default = todas.filtered(lambda c: c.es_default)
+        default = self.search([
+            ('es_default', '=', True),
+            ('esta_activo', '=', True),
+        ], limit=1)
         if default:
-            return default[0]
+            return default
 
-        # Si no hay default, retorna la primera
-        return todas[0]
+        return False
 
     def _crear_config_default(self):
         stage_cerrado = self.env['helpdesk.ticket.stage'].search(
@@ -186,6 +265,69 @@ class CobranzaConfig(models.Model):
             'view_mode': 'list,form',
             'target': 'current',
         }
+        
+    @api.constrains(
+        'business_unit_ids', 'document_type_ids',
+        'payment_term_ids', 'min_documentos', 'max_documentos',
+        'esta_activo'
+    )
+    def _check_condiciones_duplicadas(self):
+        for rec in self:
+            if rec.es_default:
+                continue
+            otras = self.search([
+                ('id', '!=', rec.id),
+                ('es_default', '=', False),
+                ('esta_activo', '=', True),
+            ])
+            for otra in otras:
+                # Verificar solapamiento en business_unit_ids
+                bu_solapa = bool(
+                    set(rec.business_unit_ids.ids) & set(otra.business_unit_ids.ids)
+                )
+                # Verificar solapamiento en document_type_ids
+                dt_solapa = bool(
+                    set(rec.document_type_ids.ids) & set(otra.document_type_ids.ids)
+                )
+                # Verificar solapamiento en payment_term_ids
+                # Solo solapa si ambas están vacías (aplican a cualquier plazo)
+                # o si comparten algún plazo específico
+                if not rec.payment_term_ids and not otra.payment_term_ids:
+                    pt_solapa = True
+                elif not rec.payment_term_ids or not otra.payment_term_ids:
+                    # Una tiene plazo y la otra no → no solapa
+                    pt_solapa = False
+                else:
+                    pt_solapa = bool(
+                        set(rec.payment_term_ids.ids) & set(otra.payment_term_ids.ids)
+                    )
+                # Verificar solapamiento en rango de documentos
+                rango_solapa = self._rangos_solapan(
+                    rec.min_documentos, rec.max_documentos,
+                    otra.min_documentos, otra.max_documentos,
+                )
+
+                if bu_solapa and dt_solapa and pt_solapa and rango_solapa:
+                    raise UserError(
+                        f'La configuración "{rec.name}" solapa condiciones con '
+                        f'"{otra.name}". Revisa las unidades de negocio, tipos de '
+                        f'documento, plazos de pago y rango de documentos.'
+                    )
+
+    @api.model
+    def _rangos_solapan(self, min1, max1, min2, max2):
+        """
+        Verifica si dos rangos [min1, max1] y [min2, max2] se solapan.
+        0 en min indica sin límite inferior (= 0).
+        0 en max indica sin límite superior (= infinito).
+        """
+        # Convertir 0 en max a infinito
+        max1_eff = max1 if max1 > 0 else float('inf')
+        max2_eff = max2 if max2 > 0 else float('inf')
+        min1_eff = min1 if min1 > 0 else 0
+        min2_eff = min2 if min2 > 0 else 0
+        # Dos rangos [a,b] y [c,d] solapan si a <= d y c <= b
+        return min1_eff <= max2_eff and min2_eff <= max1_eff
 
 
 class CobranzaConfigTarea(models.Model):

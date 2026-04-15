@@ -15,20 +15,28 @@
                         <group>
                             <field name="secuencia"/>
                             <field name="es_default"/>
+                            <field name="esta_activo" string="Activo"/>
                         </group>
                     </group>
 
                     <separator string="Condiciones"/>
                     <p class="text-muted">
                         Esta configuración aplica cuando el cliente y documento coincidan
-                        con alguna de las unidades de negocio y tipos de documento seleccionados.
+                        con las condiciones configuradas. Los campos vacíos aplican a cualquier valor.
                     </p>
                     <group>
                         <group>
                             <field name="business_unit_ids" widget="many2many_tags"/>
+                            <field name="payment_term_ids" widget="many2many_tags"/>
                         </group>
                         <group>
                             <field name="document_type_ids" widget="many2many_tags"/>
+                        </group>
+                    </group>
+                    <group >
+                        <group string="Rango de documentos pendientes">
+                            <field name="min_documentos" string="Mínimo"/>
+                            <field name="max_documentos" string="Máximo"/>
                         </group>
                     </group>
 
@@ -106,6 +114,7 @@
                 <field name="document_type_ids" widget="many2many_tags"/>
                 <field name="team_id"/>
                 <field name="es_default"/>
+                <field name="esta_activo" string="Activo"/>
             </list>
         </field>
     </record>

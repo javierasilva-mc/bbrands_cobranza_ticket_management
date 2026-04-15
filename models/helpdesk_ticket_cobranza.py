@@ -119,6 +119,8 @@ class HelpdeskTicketCobranza(models.Model):
         for ticket in tickets_abiertos:
             partners_con_ticket_abierto.add(ticket.partner_id.id)
             cfg = cfg_model.get_config(partner=ticket.partner_id)
+            if not cfg:
+                continue
             self._actualizar_ticket_existente(ticket, cfg)
 
         # Paso 2: recopilar partners con ticket cerrado que aún tienen pendientes
@@ -149,19 +151,34 @@ class HelpdeskTicketCobranza(models.Model):
         # Agrupar por (partner_id, config_id)
         grupos = {}
         for move in boletas_nuevas:
+            partner = move.partner_id
+
+            # Contar boletas pendientes del cliente para la condición de rango
+            num_docs = self.env['account.move'].search_count([
+                ('move_type', 'in', ['out_invoice', 'out_receipt']),
+                ('payment_state', 'in', ['not_paid', 'partial']),
+                ('state', '=', 'posted'),
+                ('partner_id', '=', partner.id),
+            ])
+
             cfg = cfg_model.get_config(
-                partner=move.partner_id,
+                partner=partner,
                 move=move,
+                num_documentos=num_docs,
             )
+            
+            if not cfg:
+                continue
+            
             estados = self._get_estados_pendientes(cfg)
             if move.payment_state not in estados:
                 continue
             if move.invoice_date > hoy - datetime.timedelta(days=cfg.dias_vencimiento):
                 continue
-            key = (move.partner_id.id, cfg.id)
+            key = (partner.id, cfg.id)
             if key not in grupos:
                 grupos[key] = {
-                    'partner': move.partner_id,
+                    'partner': partner,
                     'cfg': cfg,
                     'moves': [],
                 }
@@ -426,11 +443,13 @@ class HelpdeskTicketCobranza(models.Model):
     def write(self, vals):
         if ('state_id' in vals and
                 not self.env.context.get('skip_cobranza_check')):
-            cfg = self._get_cobranza_config()
-            if vals['state_id'] == cfg.stage_cerrado_id.id:
-                for ticket in self:
-                    if not ticket.es_ticket_cobranza:
-                        continue
+            for ticket in self:
+                if not ticket.es_ticket_cobranza:
+                    continue
+                cfg = ticket.cobranza_config_id
+                if not cfg:
+                    continue
+                if vals['state_id'] == cfg.stage_cerrado_id.id:
                     pendientes = ticket.invoice_cobranza_ids.filtered(
                         lambda m: m.payment_state in self._get_estados_pendientes(cfg)
                     )
@@ -458,8 +477,6 @@ class AccountMoveCobranza(models.Model):
         super()._compute_payment_state()
 
         ticket_model = self.env['helpdesk.ticket']
-        cfg = self.env['cobranza.config'].get_config()
-        estados_pendientes = self.env['helpdesk.ticket']._get_estados_pendientes(cfg)
 
         for move in self:
             estado_anterior = estados_anteriores.get(move.id)
@@ -468,17 +485,22 @@ class AccountMoveCobranza(models.Model):
             if not estado_anterior or estado_anterior == estado_nuevo:
                 continue
 
-            # Buscar tickets abiertos para chatter e historial de pago
+            # Buscar tickets abiertos — cada ticket tiene su propia config
             tickets_abiertos = ticket_model.search([
                 ('invoice_cobranza_ids', 'in', move.id),
                 ('es_ticket_cobranza', '=', True),
-                ('state_id', '!=', cfg.stage_cerrado_id.id),
-            ])
+            ]).filtered(lambda t: (
+                t.cobranza_config_id and
+                t.state_id.id != t.cobranza_config_id.stage_cerrado_id.id
+            ))
 
             label_ant = PAYMENT_STATE_LABELS.get(estado_anterior, estado_anterior)
             label_nvo = PAYMENT_STATE_LABELS.get(estado_nuevo, estado_nuevo)
 
             for ticket in tickets_abiertos:
+                cfg = ticket.cobranza_config_id
+                estados_pendientes = self.env['helpdesk.ticket']._get_estados_pendientes(cfg)
+
                 asignados = ', '.join(ticket.assigned_to_ids.mapped('name')) if ticket.assigned_to_ids else 'Sin asignar'
                 body = Markup(
                     '<p><b>Cambio de estado en documento:</b></p>'
@@ -516,42 +538,49 @@ class AccountMoveCobranza(models.Model):
                     'fecha_evento': fields.Datetime.now(),
                 })
 
-            # Buscar tickets CERRADOS para reabrir si la boleta vuelve a pendiente
-            if estado_nuevo in estados_pendientes:
-                tickets_cerrados = ticket_model.search([
-                    ('invoice_cobranza_ids', '=', move.id),
-                    ('es_ticket_cobranza', '=', True),
-                    ('state_id', '=', cfg.stage_cerrado_id.id),
-                ])
+            # Buscar tickets CERRADOS para reabrir
+            tickets_cerrados = ticket_model.search([
+                ('invoice_cobranza_ids', 'in', move.id),
+                ('es_ticket_cobranza', '=', True),
+            ]).filtered(lambda t: (
+                t.cobranza_config_id and
+                t.state_id.id == t.cobranza_config_id.stage_cerrado_id.id
+            ))
 
-                for ticket in tickets_cerrados:
-                    ticket.with_context(skip_cobranza_check=True).write({
-                        'state_id': cfg.stage_in_progress_id.id,
-                        'is_closed': False,
-                    })
-                    ticket.message_post(
-                        body=Markup(
-                            '<p><b>Ticket reabierto</b> — la boleta <b>{nombre}</b> '
-                            'volvió a estado pendiente ({estado}).</p>'
-                        ).format(
-                            nombre=move.name,
-                            estado=label_nvo,
-                        ),
-                        subtype_xmlid='mail.mt_note',
-                    )
-                    self.env['cobranza.historial'].create({
-                        'ticket_id': ticket.id,
-                        'move_id': move.id,
-                        'tipo_evento': 'reapertura',
-                        'estado_anterior': 'cerrado',
-                        'estado_nuevo': estado_nuevo,
-                        'partner_id': ticket.partner_id.id,
-                        'monto_original': move.amount_total,
-                        'monto_recuperado': 0.0,
-                        'currency_id': move.currency_id.id,
-                        'ejecutivo_ids': [(6, 0, ticket.assigned_to_ids.ids)],
-                        'fecha_evento': fields.Datetime.now(),
-                    })
+            for ticket in tickets_cerrados:
+                cfg = ticket.cobranza_config_id
+                estados_pendientes = self.env['helpdesk.ticket']._get_estados_pendientes(cfg)
+
+                if estado_nuevo not in estados_pendientes:
+                    continue
+
+                ticket.with_context(skip_cobranza_check=True).write({
+                    'state_id': cfg.stage_in_progress_id.id,
+                    'is_closed': False,
+                })
+                ticket.message_post(
+                    body=Markup(
+                        '<p><b>Ticket reabierto</b> — la boleta <b>{nombre}</b> '
+                        'volvió a estado pendiente ({estado}).</p>'
+                    ).format(
+                        nombre=move.name,
+                        estado=label_nvo,
+                    ),
+                    subtype_xmlid='mail.mt_note',
+                )
+                self.env['cobranza.historial'].create({
+                    'ticket_id': ticket.id,
+                    'move_id': move.id,
+                    'tipo_evento': 'reapertura',
+                    'estado_anterior': 'cerrado',
+                    'estado_nuevo': estado_nuevo,
+                    'partner_id': ticket.partner_id.id,
+                    'monto_original': move.amount_total,
+                    'monto_recuperado': 0.0,
+                    'currency_id': move.currency_id.id,
+                    'ejecutivo_ids': [(6, 0, ticket.assigned_to_ids.ids)],
+                    'fecha_evento': fields.Datetime.now(),
+                })
 
 
 class ProjectTaskCobranza(models.Model):
@@ -568,21 +597,25 @@ class ProjectTaskCobranza(models.Model):
                 fechas_anteriores[task.id] = task.cobranza_fecha_acuerdo
 
         if 'state_id' in vals:
-            cfg = self.env['cobranza.config'].get_config()
-            stage_done = cfg.stage_tarea_completada_id
-            if stage_done and vals['state_id'] == stage_done.id:
-                cfg = self.env['cobranza.config'].get_config()
-                tarea_acuerdo_cfg = cfg.tarea_ids.filtered(
-                    lambda t: t.es_tarea_acuerdo)
-                if tarea_acuerdo_cfg:
-                    tmpl_id = tarea_acuerdo_cfg[0].task_template_id.id
-                    for task in self:
-                        if (task.task_template_id.id == tmpl_id
-                                and not task.cobranza_fecha_acuerdo):
-                            raise UserError(_(
-                                'No puedes cerrar la tarea "%s" sin registrar '
-                                'una fecha de compromiso de pago.'
-                            ) % task.name)
+            for task in self:
+                if not task.ticket_id or not task.ticket_id.es_ticket_cobranza:
+                    continue
+                cfg = task.ticket_id.cobranza_config_id
+                if not cfg:
+                    continue
+                stage_done = cfg.stage_tarea_completada_id
+                if not stage_done or vals['state_id'] != stage_done.id:
+                    continue
+                tarea_acuerdo_cfg = cfg.tarea_ids.filtered(lambda t: t.es_tarea_acuerdo)
+                if not tarea_acuerdo_cfg:
+                    continue
+                tmpl_id = tarea_acuerdo_cfg[0].task_template_id.id
+                if (task.task_template_id.id == tmpl_id
+                        and not task.cobranza_fecha_acuerdo):
+                    raise UserError(_(
+                        'No puedes cerrar la tarea "%s" sin registrar '
+                        'una fecha de compromiso de pago.'
+                    ) % task.name)
 
         res = super().write(vals)
 
