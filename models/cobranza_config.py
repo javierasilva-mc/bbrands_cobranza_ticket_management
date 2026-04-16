@@ -95,27 +95,63 @@ class CobranzaConfig(models.Model):
         string='Reglas de seguimiento',
     )
     
-    esta_activo = fields.Boolean(
-        string='Activo',
-        default=True,
-    )
+    state = fields.Selection([
+        ('borrador', 'Borrador'),
+        ('activo',   'Activo'),
+        ('inactivo', 'Inactivo'),
+    ], string='Estado', default='borrador', required=True)
+    
+    def action_activar(self):
+        self.ensure_one()
+        # Validar campos obligatorios antes de activar
+        campos_faltantes = []
+        if not self.ticket_type_id:
+            campos_faltantes.append('Tipo de ticket')
+        if not self.category_id:
+            campos_faltantes.append('Categoría')
+        if not self.subcategory_id:
+            campos_faltantes.append('Subcategoría')
+        if not self.stage_cerrado_id:
+            campos_faltantes.append('Stage cerrado')
+        if not self.stage_in_progress_id:
+            campos_faltantes.append('Stage reapertura')
+        if not self.stage_tarea_completada_id:
+            campos_faltantes.append('Stage tarea completada')
+        if not self.team_id:
+            campos_faltantes.append('Equipo')
+
+        if campos_faltantes:
+            raise UserError(
+                'No puedes activar esta configuración. '
+                'Faltan los siguientes campos obligatorios:\n- '
+                + '\n- '.join(campos_faltantes)
+            )
+
+        self._check_condiciones_duplicadas()
+        self.state = 'activo'
+
+    def action_desactivar(self):
+        self.ensure_one()
+        self.state = 'inactivo'
+
+    def action_reactivar(self):
+        self.ensure_one()
+        self._check_condiciones_duplicadas()
+        self.state = 'activo'
     
     def write(self, vals):
-        # Verificar si la config tiene tickets creados
         for rec in self:
             tiene_tickets = self.env['helpdesk.ticket'].search_count([
                 ('cobranza_config_id', '=', rec.id),
                 ('es_ticket_cobranza', '=', True),
             ])
-            if tiene_tickets:
-                campos_permitidos = {'name', 'esta_activo'}
-                campos_modificados = set(vals.keys())
-                campos_no_permitidos = campos_modificados - campos_permitidos
+            if tiene_tickets or rec.state == 'activo':
+                campos_permitidos = {'name', 'state'}
+                campos_no_permitidos = set(vals.keys()) - campos_permitidos
                 if campos_no_permitidos:
                     raise UserError(
-                        f'La configuración "{rec.name}" ya tiene tickets creados '
-                        f'y no puede ser modificada. Si necesitas cambiar la '
-                        f'configuración, crea una nueva y desactiva esta.'
+                        f'La configuración "{rec.name}" no puede ser modificada. '
+                        f'Si necesitas cambiar la configuración, por favor crea una nueva.'
                     )
         return super().write(vals)
 
@@ -136,7 +172,7 @@ class CobranzaConfig(models.Model):
     def get_config(self, partner=None, move=None, num_documentos=0):
         todas = self.search([
             ('es_default', '=', False),
-            ('esta_activo', '=', True),
+            ('state', '=', 'activo'),
         ], order='secuencia')
 
         if not todas and not self.search([('es_default', '=', True)]):
@@ -196,7 +232,7 @@ class CobranzaConfig(models.Model):
         # Fallback a la configuración por defecto
         default = self.search([
             ('es_default', '=', True),
-            ('esta_activo', '=', True),
+            ('state', '=', 'activo'),
         ], limit=1)
         if default:
             return default
@@ -269,7 +305,7 @@ class CobranzaConfig(models.Model):
     @api.constrains(
         'business_unit_ids', 'document_type_ids',
         'payment_term_ids', 'min_documentos', 'max_documentos',
-        'esta_activo'
+        'state'
     )
     def _check_condiciones_duplicadas(self):
         for rec in self:
@@ -278,7 +314,7 @@ class CobranzaConfig(models.Model):
             otras = self.search([
                 ('id', '!=', rec.id),
                 ('es_default', '=', False),
-                ('esta_activo', '=', True),
+                ('state', '=', 'activo'),
             ])
             for otra in otras:
                 # Verificar solapamiento en business_unit_ids

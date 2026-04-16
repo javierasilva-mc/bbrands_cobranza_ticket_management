@@ -6,6 +6,24 @@
         <field name="model">cobranza.config</field>
         <field name="arch" type="xml">
             <form string="Configuración de Cobranza">
+                <header>
+                    <button name="action_activar"
+                            string="Activar"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'borrador'"/>
+                    <button name="action_reactivar"
+                            string="Reactivar"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'inactivo'"/>
+                    <button name="action_desactivar"
+                            string="Desactivar"
+                            type="object"
+                            invisible="state != 'activo'"/>
+                    <field name="state" widget="statusbar"
+                        statusbar_visible="borrador,activo,inactivo"/>
+                </header>
                 <sheet>
                     <div class="oe_title">
                         <h1><field name="name" placeholder="Nombre de la configuración"/></h1>
@@ -15,7 +33,6 @@
                         <group>
                             <field name="secuencia"/>
                             <field name="es_default"/>
-                            <field name="esta_activo" string="Activo"/>
                         </group>
                     </group>
 
@@ -26,43 +43,48 @@
                     </p>
                     <group>
                         <group>
-                            <field name="business_unit_ids" widget="many2many_tags"/>
-                            <field name="payment_term_ids" widget="many2many_tags"/>
+                            <field name="business_unit_ids" widget="many2many_tags"
+                                readonly="state != 'borrador'"/>
+                            <field name="payment_term_ids" widget="many2many_tags"
+                                readonly="state != 'borrador'"/>
                         </group>
                         <group>
-                            <field name="document_type_ids" widget="many2many_tags"/>
+                            <field name="document_type_ids" widget="many2many_tags"
+                                readonly="state != 'borrador'"/>
                         </group>
                     </group>
-                    <group >
+                    <group>
                         <group string="Rango de documentos pendientes">
-                            <field name="min_documentos" string="Mínimo"/>
-                            <field name="max_documentos" string="Máximo"/>
+                            <field name="min_documentos" string="Mínimo"
+                                readonly="state != 'borrador'"/>
+                            <field name="max_documentos" string="Máximo"
+                                readonly="state != 'borrador'"/>
                         </group>
                     </group>
 
                     <separator string="Configuración general"/>
                     <group>
                         <group string="Parámetros operacionales">
-                            <field name="dias_vencimiento"/>
-                            <field name="team_id"/>
-                            <field name="ejecutivo_default_id"/>
-                            <field name="incluir_in_payment"/>
+                            <field name="dias_vencimiento" readonly="state != 'borrador'"/>
+                            <field name="team_id" readonly="state != 'borrador'"/>
+                            <field name="ejecutivo_default_id" readonly="state != 'borrador'"/>
+                            <field name="incluir_in_payment" readonly="state != 'borrador'"/>
                         </group>
                         <group string="Clasificación del ticket">
-                            <field name="ticket_type_id"/>
-                            <field name="category_id"/>
-                            <field name="subcategory_id"/>
-                            <field name="subcategory_template_id"/>
+                            <field name="ticket_type_id" readonly="state != 'borrador'"/>
+                            <field name="category_id" readonly="state != 'borrador'"/>
+                            <field name="subcategory_id" readonly="state != 'borrador'"/>
+                            <field name="subcategory_template_id" readonly="state != 'borrador'"/>
                         </group>
                         <group string="Stages">
-                            <field name="stage_cerrado_id"/>
-                            <field name="stage_in_progress_id"/>
-                            <field name="stage_tarea_completada_id"/>
+                            <field name="stage_cerrado_id" readonly="state != 'borrador'"/>
+                            <field name="stage_in_progress_id" readonly="state != 'borrador'"/>
+                            <field name="stage_tarea_completada_id" readonly="state != 'borrador'"/>
                         </group>
                     </group>
 
                     <separator string="Tareas iniciales"/>
-                    <field name="tarea_ids">
+                    <field name="tarea_ids" readonly="state != 'borrador'">
                         <list editable="bottom">
                             <field name="secuencia" widget="handle"/>
                             <field name="task_template_id"/>
@@ -71,13 +93,13 @@
                     </field>
 
                     <separator string="Reglas de seguimiento"/>
-                    <field name="regla_ids">
+                    <field name="regla_ids" readonly="state != 'borrador'">
                         <list open_form_view="true">
                             <field name="secuencia" widget="handle"/>
                             <field name="tarea_disparadora_id"/>
                             <field name="condicion"/>
                             <field name="tarea_ids" widget="many2many_tags"
-                                   string="Tareas a crear"/>
+                                string="Tareas a crear"/>
                         </list>
                         <form string="Regla de seguimiento">
                             <group>
@@ -85,7 +107,7 @@
                                 <field name="tarea_disparadora_id"/>
                                 <field name="condicion"/>
                                 <field name="dias_condicion"
-                                       invisible="condicion != 'dias_ultima_tarea'"/>
+                                    invisible="condicion != 'dias_ultima_tarea'"/>
                                 <field name="requiere_tarea_completada"/>
                             </group>
                             <separator string="Tareas a crear"/>
@@ -114,7 +136,7 @@
                 <field name="document_type_ids" widget="many2many_tags"/>
                 <field name="team_id"/>
                 <field name="es_default"/>
-                <field name="esta_activo" string="Activo"/>
+                <field name="state" string="Estado"/>
             </list>
         </field>
     </record>

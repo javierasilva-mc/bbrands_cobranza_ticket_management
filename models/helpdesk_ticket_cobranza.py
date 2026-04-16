@@ -572,7 +572,7 @@ class AccountMoveCobranza(models.Model):
                     'ticket_id': ticket.id,
                     'move_id': move.id,
                     'tipo_evento': 'reapertura',
-                    'estado_anterior': 'cerrado',
+                    'estado_anterior': estado_anterior,
                     'estado_nuevo': estado_nuevo,
                     'partner_id': ticket.partner_id.id,
                     'monto_original': move.amount_total,
