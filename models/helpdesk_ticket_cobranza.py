@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 import datetime
-import logging
 from markupsafe import Markup
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 
-_logger = logging.getLogger(__name__)
 
 PAYMENT_STATE_LABELS = {
     'not_paid':         'Sin pagar',
@@ -184,9 +182,6 @@ class HelpdeskTicketCobranza(models.Model):
                 }
             grupos[key]['moves'].append(move)
 
-        _logger.info("COBRANZA CRON - Grupos a procesar: %s",
-            [(g['partner'].name, g['cfg'].name) for g in grupos.values()])
-
         for key, data in grupos.items():
             self._crear_ticket_cobranza(data['partner'], data['moves'], data['cfg'])
 
@@ -290,9 +285,6 @@ class HelpdeskTicketCobranza(models.Model):
         total = sum(m.amount_residual for m in todas_pendientes)
         currency = todas_pendientes[0].currency_id.name if todas_pendientes else 'CLP'
 
-        _logger.info("COBRANZA - Creando ticket para partner: %s (id: %s), config: %s, boletas: %s",
-            partner.name, partner.id, cfg.name, [m.name for m in todas_pendientes])
-
         ticket = self.env['helpdesk.ticket'].create({
             'name': f'Cobranza vencida: {partner.name}',
             'es_ticket_cobranza': True,
@@ -310,9 +302,6 @@ class HelpdeskTicketCobranza(models.Model):
                 f'Boletas:\n{detalle}'
             ),
         })
-
-        _logger.info("COBRANZA - Ticket creado: id=%s, partner_id=%s",
-            ticket.id, ticket.partner_id.id)
 
         self._crear_tareas_iniciales_cobranza(ticket, cfg)
 
@@ -514,7 +503,6 @@ class AccountMoveCobranza(models.Model):
 
             for ticket in tickets_abiertos:
                 cfg = ticket.cobranza_config_id
-                estados_pendientes = self.env['helpdesk.ticket']._get_estados_pendientes(cfg)
 
                 asignados = ', '.join(ticket.assigned_to_ids.mapped('name')) if ticket.assigned_to_ids else 'Sin asignar'
                 body = Markup(
@@ -564,9 +552,8 @@ class AccountMoveCobranza(models.Model):
 
             for ticket in tickets_cerrados:
                 cfg = ticket.cobranza_config_id
-                estados_pendientes = self.env['helpdesk.ticket']._get_estados_pendientes(cfg)
 
-                if estado_nuevo not in estados_pendientes:
+                if estado_nuevo not in self.env['helpdesk.ticket']._get_estados_pendientes(cfg):
                     continue
 
                 ticket.with_context(skip_cobranza_check=True).write({

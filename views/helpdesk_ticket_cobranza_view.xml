@@ -33,10 +33,6 @@
                               create="false"
                               delete="false"
                               open_form_view="true">
-                            <!--
-                                open_form_view="true" habilita el ícono de flecha
-                                en cada fila para abrir la factura completa.
-                            -->
                             <field name="name"
                                    string="Número"
                                    readonly="1"/>
@@ -81,7 +77,8 @@
                                    decoration-success="tipo_evento == 'pago'"
                                    decoration-warning="tipo_evento in ['acuerdo', 'seguimiento']"
                                    decoration-primary="tipo_evento == 'boleta_agregada'"
-                                   decoration-danger="tipo_evento == 'reapertura'"/>
+                                   decoration-danger="tipo_evento == 'reapertura'"
+                                   decoration-muted="tipo_evento == 'ticket_cerrado'"/>
                             <field name="move_id" string="Boleta / Factura"/>
                             <field name="estado_anterior" string="Estado anterior"/>
                             <field name="estado_nuevo" string="Estado nuevo"/>
