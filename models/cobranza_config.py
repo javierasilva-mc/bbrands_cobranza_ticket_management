@@ -101,6 +101,12 @@ class CobranzaConfig(models.Model):
         ('inactivo', 'Inactivo'),
     ], string='Estado', default='borrador', required=True)
     
+    segmento_excepcion_id = fields.Many2one(
+        'customer.segment',
+        string='Segmento de excepción',
+        help='Los clientes con este segmento serán excluidos del proceso de cobranza para esta configuración.',
+    )
+    
     def action_activar(self):
         self.ensure_one()
         # Validar campos obligatorios antes de activar
@@ -238,6 +244,12 @@ class CobranzaConfig(models.Model):
             return default
 
         return False
+
+    def partner_excluido(self, partner):
+        """Retorna True si el partner debe ser excluido de esta configuración."""
+        if not self.segmento_excepcion_id:
+            return False
+        return partner.customer_segment_id.id == self.segmento_excepcion_id.id
 
     def _crear_config_default(self):
         stage_cerrado = self.env['helpdesk.ticket.stage'].search(

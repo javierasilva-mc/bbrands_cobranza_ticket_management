@@ -119,7 +119,7 @@ class HelpdeskTicketCobranza(models.Model):
         for ticket in tickets_abiertos:
             partners_con_ticket_abierto.add(ticket.partner_id.id)
             cfg = cfg_model.get_config(partner=ticket.partner_id)
-            if not cfg:
+            if not cfg or cfg.partner_excluido(ticket.partner_id):
                 continue
             self._actualizar_ticket_existente(ticket, cfg)
 
@@ -167,7 +167,7 @@ class HelpdeskTicketCobranza(models.Model):
                 num_documentos=num_docs,
             )
             
-            if not cfg:
+            if not cfg or cfg.partner_excluido(partner):
                 continue
             
             estados = self._get_estados_pendientes(cfg)
@@ -441,8 +441,9 @@ class HelpdeskTicketCobranza(models.Model):
                 })
                 
     def write(self, vals):
-        if ('state_id' in vals and
-                not self.env.context.get('skip_cobranza_check')):
+        # Capturar tickets que van a cerrarse
+        tickets_a_cerrar = []
+        if 'state_id' in vals and not self.env.context.get('skip_cobranza_check'):
             for ticket in self:
                 if not ticket.es_ticket_cobranza:
                     continue
@@ -458,7 +459,21 @@ class HelpdeskTicketCobranza(models.Model):
                             'No puedes cerrar el ticket "%s" mientras existen '
                             'boletas pendientes de pago.'
                         ) % ticket.name)
-        return super().write(vals)
+                    tickets_a_cerrar.append(ticket)
+
+        res = super().write(vals)
+
+        # Registrar cierre en historial
+        for ticket in tickets_a_cerrar:
+            self.env['cobranza.historial'].create({
+                'ticket_id': ticket.id,
+                'tipo_evento': 'ticket_cerrado',
+                'partner_id': ticket.partner_id.id,
+                'ejecutivo_ids': [(6, 0, ticket.assigned_to_ids.ids)],
+                'fecha_evento': fields.Datetime.now(),
+            })
+
+        return res
     
     def _get_estados_pendientes(self, cfg=None):
         if cfg is None:
@@ -701,6 +716,7 @@ class CobranzaHistorial(models.Model):
         ('acuerdo',         'Acuerdo de pago registrado'),
         ('seguimiento',     'Seguimiento creado'),
         ('reapertura',      'Ticket reabierto'),
+        ('ticket_cerrado',  'Ticket cerrado'),
     ], string='Tipo de evento', required=True)
     estado_anterior = fields.Char(string='Estado anterior')
     estado_nuevo    = fields.Char(string='Estado nuevo')

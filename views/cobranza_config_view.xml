@@ -47,6 +47,8 @@
                                 readonly="state != 'borrador'"/>
                             <field name="payment_term_ids" widget="many2many_tags"
                                 readonly="state != 'borrador'"/>
+                            <field name="segmento_excepcion_id"
+                                readonly="state != 'borrador'"/>
                         </group>
                         <group>
                             <field name="document_type_ids" widget="many2many_tags"
